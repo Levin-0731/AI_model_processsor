@@ -1,0 +1,15 @@
+{
+  "api_url": "https://api.moonshot.cn/v1/chat/completions",
+  "api_key": "sk-your-api-key-here",
+  "model_name": "kimi-k2-0905-preview",
+  "temperature": 0.6,
+  "max_tokens": 2000,
+  "timeout": 30,
+  "max_retries": 3,
+  "retry_delay": 2,
+  "request_delay": 1,
+  "csv_input_file": "sample_data.csv",
+  "prompt_file": "system_prompt.md",
+  "user_prompt_column": "user_prompt",
+  "progress_file": "progress.json"
+}
