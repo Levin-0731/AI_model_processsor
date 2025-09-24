@@ -1,15 +1,17 @@
 {
-  "api_url": "https://api.moonshot.cn/v1/chat/completions",
-  "api_key": "sk-your-api-key-here",
-  "model_name": "kimi-k2-0905-preview",
-  "temperature": 0.6,
-  "max_tokens": 2000,
+  "api_url": "https://api.deepseek.com/v1/chat/completions",
+  "api_key": "sk-e9b2d5f124bc4892b0b1287573d6a938",
+  "model_name": "deepseek-chat",
+  "temperature": 0.3,
+  "max_tokens": 5000,
   "timeout": 30,
   "max_retries": 3,
-  "retry_delay": 2,
-  "request_delay": 1,
-  "csv_input_file": "sample_data.csv",
+  "retry_delay": 1,
+  "request_delay": 0.5,
+  "csv_input_file": "挂单审核的数据集 - Sheet3.csv",
   "prompt_file": "system_prompt.md",
-  "user_prompt_column": "user_prompt",
-  "progress_file": "progress.json"
+  "user_prompt_column": "remark",
+  "progress_file": "progress.json",
+  "max_workers": 3,
+  "_comment": "max_workers: 并发线程数量，建议3-8，过多可能触发API限制"
 }

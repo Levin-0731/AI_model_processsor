@@ -16,12 +16,17 @@ from tqdm import tqdm
 import argparse
 import logging
 from datetime import datetime
+import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from threading import Lock
 
 class AIModelProcessor:
     def __init__(self, config_file: str = "config.json"):
         """初始化AI模型处理器"""
         self.config = self.load_config(config_file)
         self.setup_logging()
+        self.progress_lock = Lock()  # 进度更新锁
+        self.csv_lock = Lock()  # CSV文件写入锁
         
     def load_config(self, config_file: str) -> Dict[str, Any]:
         """加载配置文件"""
@@ -37,7 +42,9 @@ class AIModelProcessor:
             "csv_input_file": "sample_data.csv",
             "prompt_file": "system_prompt.md",
             "user_prompt_column": "user_prompt",
-            "progress_file": "progress.json"
+            "progress_file": "progress.json",
+            "max_workers": 3,  # 并发线程数
+            "request_delay": 0.5  # 请求间隔（秒）
         }
         
         if os.path.exists(config_file):
@@ -172,6 +179,45 @@ class AIModelProcessor:
             self.logger.error(f"JSON解析错误: {e}, 内容: {content}")
             return None
     
+    def process_single_row(self, index: int, user_prompt: str, system_prompt: str, 
+                          df: pd.DataFrame, reasoning_col: str, classification_col: str,
+                          progress: Dict[str, Any]) -> bool:
+        """处理单行数据（线程安全）"""
+        try:
+            # 添加请求延迟避免API限制
+            time.sleep(self.config.get("request_delay", 0.5))
+            
+            self.logger.info(f"处理第 {index + 1} 行数据...")
+            
+            # 调用AI API
+            result = self.call_ai_api(user_prompt, system_prompt)
+            
+            if result:
+                reasoning = result.get("Thoughts", "")
+                classification = result.get("Category", "")
+                
+                # 线程安全地更新DataFrame
+                with self.csv_lock:
+                    df.at[index, reasoning_col] = reasoning
+                    df.at[index, classification_col] = classification
+                
+                # 线程安全地更新进度
+                with self.progress_lock:
+                    progress["last_processed_index"] = max(progress["last_processed_index"], index)
+                    if index not in progress["processed_rows"]:
+                        progress["processed_rows"].append(index)
+                    self.save_progress(progress)
+                
+                self.logger.info(f"成功处理第 {index + 1} 行: {classification}")
+                return True
+            else:
+                self.logger.error(f"处理第 {index + 1} 行失败")
+                return False
+                
+        except Exception as e:
+            self.logger.error(f"处理第 {index + 1} 行异常: {e}")
+            return False
+    
     def process_csv(self) -> bool:
         """处理CSV文件"""
         csv_file = self.config["csv_input_file"]
@@ -208,53 +254,66 @@ class AIModelProcessor:
         if classification_col not in df.columns:
             df[classification_col] = ""
         
-        # 处理数据
+        # 收集需要处理的行
         total_rows = len(df)
-        processed_count = 0
+        rows_to_process = []
         
-        with tqdm(total=total_rows, initial=start_index, desc="处理进度") as pbar:
-            for index, row in df.iterrows():
-                if index < start_index:
-                    continue
+        for index, row in df.iterrows():
+            if index < start_index:
+                continue
                 
-                # 检查是否已经处理过
-                if (not pd.isna(row[reasoning_col]) and row[reasoning_col] != "" and
-                    not pd.isna(row[classification_col]) and row[classification_col] != ""):
-                    pbar.update(1)
-                    continue
+            # 检查是否已经处理过
+            if (not pd.isna(row[reasoning_col]) and row[reasoning_col] != "" and
+                not pd.isna(row[classification_col]) and row[classification_col] != ""):
+                continue
                 
-                user_prompt = str(row[user_prompt_col])
+            user_prompt = str(row[user_prompt_col])
+            rows_to_process.append((index, user_prompt))
+        
+        if not rows_to_process:
+            self.logger.info("所有数据已处理完成")
+            return True
+        
+        self.logger.info(f"开始多线程处理，待处理行数: {len(rows_to_process)}, 线程数: {self.config['max_workers']}")
+        
+        # 多线程处理
+        processed_count = 0
+        max_workers = self.config.get("max_workers", 3)
+        
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            with tqdm(total=len(rows_to_process), desc="处理进度") as pbar:
+                # 提交所有任务
+                future_to_index = {}
+                for index, user_prompt in rows_to_process:
+                    future = executor.submit(
+                        self.process_single_row, 
+                        index, user_prompt, system_prompt, 
+                        df, reasoning_col, classification_col, progress
+                    )
+                    future_to_index[future] = index
                 
-                self.logger.info(f"处理第 {index + 1} 行数据...")
-                
-                # 调用AI API
-                result = self.call_ai_api(user_prompt, system_prompt)
-                
-                if result:
-                    reasoning = result.get("reasoning", "")
-                    classification = result.get("classification", "")
-                    
-                    df.at[index, reasoning_col] = reasoning
-                    df.at[index, classification_col] = classification
-                    
-                    processed_count += 1
-                    self.logger.info(f"成功处理第 {index + 1} 行: {classification}")
-                else:
-                    self.logger.error(f"处理第 {index + 1} 行失败")
-                
-                # 更新进度
-                progress["last_processed_index"] = index
-                if index not in progress["processed_rows"]:
-                    progress["processed_rows"].append(index)
-                self.save_progress(progress)
-                
-                # 保存CSV文件
-                df.to_csv(csv_file, index=False)
-                
-                pbar.update(1)
-                
-                # 添加延迟避免API限制
-                time.sleep(0.1)
+                # 处理完成的任务
+                for future in as_completed(future_to_index):
+                    index = future_to_index[future]
+                    try:
+                        success = future.result()
+                        if success:
+                            processed_count += 1
+                        
+                        # 定期保存CSV文件（线程安全）
+                        if processed_count % 10 == 0:
+                            with self.csv_lock:
+                                df.to_csv(csv_file, index=False)
+                                
+                        pbar.update(1)
+                        
+                    except Exception as e:
+                        self.logger.error(f"线程处理异常: {e}")
+                        pbar.update(1)
+        
+        # 最终保存
+        with self.csv_lock:
+            df.to_csv(csv_file, index=False)
         
         self.logger.info(f"处理完成！共处理 {processed_count} 条新数据")
         return True
@@ -291,6 +350,14 @@ class AIModelProcessor:
         print(f"已处理: {processed_rows}")
         print(f"待处理: {total_rows - processed_rows}")
         print(f"完成率: {processed_rows/total_rows*100:.1f}%")
+        print(f"当前线程数: {self.config.get('max_workers', 3)}")
+        
+        # 预估剩余时间
+        if processed_rows > 0:
+            remaining = total_rows - processed_rows
+            avg_time_per_item = 3.0 / self.config.get('max_workers', 3)  # 假设平均3秒/项，除以线程数
+            estimated_hours = (remaining * avg_time_per_item) / 3600
+            print(f"预估剩余时间: {estimated_hours:.1f} 小时")
 
 
 def main():
@@ -298,10 +365,16 @@ def main():
     parser.add_argument('--config', default='config.json', help='配置文件路径')
     parser.add_argument('--reset', action='store_true', help='重置进度')
     parser.add_argument('--status', action='store_true', help='显示状态')
+    parser.add_argument('--workers', type=int, help='并发线程数量 (覆盖配置文件设置)')
     
     args = parser.parse_args()
     
     processor = AIModelProcessor(args.config)
+    
+    # 命令行参数覆盖配置文件设置
+    if args.workers is not None:
+        processor.config["max_workers"] = args.workers
+        print(f"使用命令行指定的线程数: {args.workers}")
     
     if args.reset:
         processor.reset_progress()
