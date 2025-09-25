@@ -8,10 +8,9 @@
   "max_retries": 3,
   "retry_delay": 1,
   "request_delay": 0.5,
-  "csv_input_file": "挂单审核的数据集 - Sheet3.csv",
+  "csv_input_file": "数据 copy.csv",
   "prompt_file": "system_prompt.md",
   "user_prompt_column": "remark",
-  "progress_file": "progress.json",
   "max_workers": 3,
   "_comment": "max_workers: 并发线程数量，建议3-8，过多可能触发API限制"
 }

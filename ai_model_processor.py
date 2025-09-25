@@ -25,7 +25,6 @@ class AIModelProcessor:
         """初始化AI模型处理器"""
         self.config = self.load_config(config_file)
         self.setup_logging()
-        self.progress_lock = Lock()  # 进度更新锁
         self.csv_lock = Lock()  # CSV文件写入锁
         
     def load_config(self, config_file: str) -> Dict[str, Any]:
@@ -42,7 +41,6 @@ class AIModelProcessor:
             "csv_input_file": "sample_data.csv",
             "prompt_file": "system_prompt.md",
             "user_prompt_column": "user_prompt",
-            "progress_file": "progress.json",
             "max_workers": 3,  # 并发线程数
             "request_delay": 0.5  # 请求间隔（秒）
         }
@@ -55,28 +53,37 @@ class AIModelProcessor:
             # 创建默认配置文件
             with open(config_file, 'w', encoding='utf-8') as f:
                 json.dump(default_config, f, indent=2, ensure_ascii=False)
-            print(f"已创建默认配置文件: {config_file}")
-            print("请修改配置文件中的API密钥等参数后重新运行")
+            print(f"📝 已创建默认配置文件: {config_file}")
+            print("⚠️  请修改配置文件中的API密钥等参数后重新运行")
             
         return default_config
     
     def setup_logging(self):
         """设置日志"""
-        logging.basicConfig(
-            level=logging.INFO,
-            format='%(asctime)s - %(levelname)s - %(message)s',
-            handlers=[
-                logging.FileHandler('ai_processor.log', encoding='utf-8'),
-                logging.StreamHandler(sys.stdout)
-            ]
-        )
+        # 文件日志 - 详细信息
+        file_handler = logging.FileHandler('ai_processor.log', encoding='utf-8')
+        file_handler.setLevel(logging.INFO)
+        file_handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
+        
+        # 控制台日志 - 简化输出
+        console_handler = logging.StreamHandler(sys.stdout)
+        console_handler.setLevel(logging.INFO)
+        console_handler.setFormatter(logging.Formatter('%(message)s'))
+        
         self.logger = logging.getLogger(__name__)
+        self.logger.setLevel(logging.INFO)
+        self.logger.addHandler(file_handler)
+        self.logger.addHandler(console_handler)
+        
+        # 禁用其他库的日志输出
+        logging.getLogger('urllib3').setLevel(logging.WARNING)
+        logging.getLogger('requests').setLevel(logging.WARNING)
     
     def load_system_prompt(self) -> str:
         """加载系统提示词"""
         prompt_file = self.config["prompt_file"]
         if not os.path.exists(prompt_file):
-            self.logger.error(f"提示词文件不存在: {prompt_file}")
+            self.logger.error(f"❌ 提示词文件不存在: {prompt_file}")
             return ""
         
         with open(prompt_file, 'r', encoding='utf-8') as f:
@@ -91,19 +98,16 @@ class AIModelProcessor:
         
         return content.strip()
     
-    def load_progress(self) -> Dict[str, Any]:
-        """加载进度文件"""
-        progress_file = self.config["progress_file"]
-        if os.path.exists(progress_file):
-            with open(progress_file, 'r', encoding='utf-8') as f:
-                return json.load(f)
-        return {"processed_rows": [], "last_processed_index": -1}
-    
-    def save_progress(self, progress: Dict[str, Any]):
-        """保存进度文件"""
-        progress_file = self.config["progress_file"]
-        with open(progress_file, 'w', encoding='utf-8') as f:
-            json.dump(progress, f, indent=2, ensure_ascii=False)
+    def check_row_processed(self, df: pd.DataFrame, index: int, reasoning_col: str, classification_col: str) -> bool:
+        """检查指定行是否已经处理过"""
+        if reasoning_col not in df.columns or classification_col not in df.columns:
+            return False
+        
+        reasoning = df.at[index, reasoning_col]
+        classification = df.at[index, classification_col]
+        
+        return (not pd.isna(reasoning) and str(reasoning).strip() != "" and
+                not pd.isna(classification) and str(classification).strip() != "")
     
     def call_ai_api(self, user_prompt: str, system_prompt: str) -> Optional[Dict[str, Any]]:
         """调用AI API"""
@@ -139,12 +143,13 @@ class AIModelProcessor:
                         content = result["choices"][0]["message"]["content"]
                         return self.parse_ai_response(content)
                     else:
-                        self.logger.error(f"API返回格式错误: {result}")
+                        self.logger.error(f"❌ API返回格式错误")
                 else:
-                    self.logger.error(f"API调用失败 (状态码: {response.status_code}): {response.text}")
+                    self.logger.error(f"❌ API调用失败 (状态码: {response.status_code})")
                 
             except requests.exceptions.RequestException as e:
-                self.logger.error(f"API调用异常 (尝试 {attempt + 1}/{self.config['max_retries']}): {e}")
+                if attempt == self.config["max_retries"] - 1:
+                    self.logger.error(f"❌ API调用失败: {str(e)[:50]}...")
                 if attempt < self.config["max_retries"] - 1:
                     time.sleep(self.config["retry_delay"] * (attempt + 1))
         
@@ -172,22 +177,19 @@ class AIModelProcessor:
                 json_content = content[start:end]
                 return json.loads(json_content)
             
-            self.logger.error(f"无法解析AI响应为JSON: {content}")
+            self.logger.error(f"❌ 无法解析AI响应为JSON")
             return None
             
         except json.JSONDecodeError as e:
-            self.logger.error(f"JSON解析错误: {e}, 内容: {content}")
+            self.logger.error(f"❌ JSON解析错误: {str(e)[:30]}...")
             return None
     
     def process_single_row(self, index: int, user_prompt: str, system_prompt: str, 
-                          df: pd.DataFrame, reasoning_col: str, classification_col: str,
-                          progress: Dict[str, Any]) -> bool:
+                          df: pd.DataFrame, reasoning_col: str, classification_col: str) -> bool:
         """处理单行数据（线程安全）"""
         try:
             # 添加请求延迟避免API限制
             time.sleep(self.config.get("request_delay", 0.5))
-            
-            self.logger.info(f"处理第 {index + 1} 行数据...")
             
             # 调用AI API
             result = self.call_ai_api(user_prompt, system_prompt)
@@ -201,21 +203,11 @@ class AIModelProcessor:
                     df.at[index, reasoning_col] = reasoning
                     df.at[index, classification_col] = classification
                 
-                # 线程安全地更新进度
-                with self.progress_lock:
-                    progress["last_processed_index"] = max(progress["last_processed_index"], index)
-                    if index not in progress["processed_rows"]:
-                        progress["processed_rows"].append(index)
-                    self.save_progress(progress)
-                
-                self.logger.info(f"成功处理第 {index + 1} 行: {classification}")
                 return True
             else:
-                self.logger.error(f"处理第 {index + 1} 行失败")
                 return False
                 
         except Exception as e:
-            self.logger.error(f"处理第 {index + 1} 行异常: {e}")
             return False
     
     def process_csv(self) -> bool:
@@ -223,7 +215,7 @@ class AIModelProcessor:
         csv_file = self.config["csv_input_file"]
         
         if not os.path.exists(csv_file):
-            self.logger.error(f"CSV文件不存在: {csv_file}")
+            self.logger.error(f"❌ CSV文件不存在: {csv_file}")
             return False
         
         # 读取CSV文件
@@ -231,18 +223,16 @@ class AIModelProcessor:
         user_prompt_col = self.config["user_prompt_column"]
         
         if user_prompt_col not in df.columns:
-            self.logger.error(f"CSV文件中不存在列: {user_prompt_col}")
+            self.logger.error(f"❌ CSV文件中不存在列: {user_prompt_col}")
             return False
         
         # 加载系统提示词
         system_prompt = self.load_system_prompt()
         if not system_prompt:
-            self.logger.error("无法加载系统提示词")
+            self.logger.error("❌ 无法加载系统提示词")
             return False
         
-        # 加载进度
-        progress = self.load_progress()
-        start_index = progress["last_processed_index"] + 1
+        # 扫描CSV文件，统计处理状态
         
         # 创建结果列
         model_name = self.config["model_name"].replace("-", "_")
@@ -254,41 +244,45 @@ class AIModelProcessor:
         if classification_col not in df.columns:
             df[classification_col] = ""
         
-        # 收集需要处理的行
+        # 扫描CSV文件，收集需要处理的行
         total_rows = len(df)
         rows_to_process = []
+        processed_count = 0
+        
+        self.logger.info(f"📊 扫描CSV文件，检查处理状态...")
         
         for index, row in df.iterrows():
-            if index < start_index:
-                continue
-                
             # 检查是否已经处理过
-            if (not pd.isna(row[reasoning_col]) and row[reasoning_col] != "" and
-                not pd.isna(row[classification_col]) and row[classification_col] != ""):
+            if self.check_row_processed(df, index, reasoning_col, classification_col):
+                processed_count += 1
                 continue
                 
             user_prompt = str(row[user_prompt_col])
             rows_to_process.append((index, user_prompt))
         
+        self.logger.info(f"📈 扫描完成: 总计 {total_rows} 行，已处理 {processed_count} 行，待处理 {len(rows_to_process)} 行")
+        
         if not rows_to_process:
-            self.logger.info("所有数据已处理完成")
+            self.logger.info("✅ 所有数据已处理完成")
             return True
         
-        self.logger.info(f"开始多线程处理，待处理行数: {len(rows_to_process)}, 线程数: {self.config['max_workers']}")
+        self.logger.info(f"🚀 开始处理 {len(rows_to_process)} 条数据 (线程数: {self.config['max_workers']})")
         
         # 多线程处理
-        processed_count = 0
+        new_processed_count = 0
         max_workers = self.config.get("max_workers", 3)
         
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            with tqdm(total=len(rows_to_process), desc="处理进度") as pbar:
+            with tqdm(total=len(rows_to_process), desc="📊 处理进度", 
+                     bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}]",
+                     ncols=80) as pbar:
                 # 提交所有任务
                 future_to_index = {}
                 for index, user_prompt in rows_to_process:
                     future = executor.submit(
                         self.process_single_row, 
                         index, user_prompt, system_prompt, 
-                        df, reasoning_col, classification_col, progress
+                        df, reasoning_col, classification_col
                     )
                     future_to_index[future] = index
                 
@@ -298,38 +292,51 @@ class AIModelProcessor:
                     try:
                         success = future.result()
                         if success:
-                            processed_count += 1
+                            new_processed_count += 1
                         
                         # 定期保存CSV文件（线程安全）
-                        if processed_count % 10 == 0:
+                        if new_processed_count % 10 == 0:
                             with self.csv_lock:
                                 df.to_csv(csv_file, index=False)
                                 
                         pbar.update(1)
                         
                     except Exception as e:
-                        self.logger.error(f"线程处理异常: {e}")
                         pbar.update(1)
         
         # 最终保存
         with self.csv_lock:
             df.to_csv(csv_file, index=False)
         
-        self.logger.info(f"处理完成！共处理 {processed_count} 条新数据")
+        self.logger.info(f"🎉 处理完成！共处理 {new_processed_count} 条新数据")
         return True
     
     def reset_progress(self):
-        """重置进度"""
-        progress_file = self.config["progress_file"]
-        if os.path.exists(progress_file):
-            os.remove(progress_file)
-        self.logger.info("进度已重置")
+        """重置进度 - 清空CSV文件中的处理结果列"""
+        csv_file = self.config["csv_input_file"]
+        if not os.path.exists(csv_file):
+            self.logger.error(f"❌ CSV文件不存在: {csv_file}")
+            return
+        
+        df = pd.read_csv(csv_file)
+        model_name = self.config["model_name"].replace("-", "_")
+        reasoning_col = f"reasoning_{model_name}"
+        classification_col = f"classification_{model_name}"
+        
+        # 清空结果列
+        if reasoning_col in df.columns:
+            df[reasoning_col] = ""
+        if classification_col in df.columns:
+            df[classification_col] = ""
+        
+        df.to_csv(csv_file, index=False)
+        self.logger.info("🔄 进度已重置，已清空所有处理结果")
     
     def show_status(self):
         """显示当前状态"""
         csv_file = self.config["csv_input_file"]
         if not os.path.exists(csv_file):
-            print(f"CSV文件不存在: {csv_file}")
+            print(f"❌ CSV文件不存在: {csv_file}")
             return
         
         df = pd.read_csv(csv_file)
@@ -340,24 +347,38 @@ class AIModelProcessor:
         total_rows = len(df)
         processed_rows = 0
         
-        if reasoning_col in df.columns and classification_col in df.columns:
-            processed_rows = len(df[(df[reasoning_col].notna()) & 
-                                   (df[reasoning_col] != "") & 
-                                   (df[classification_col].notna()) & 
-                                   (df[classification_col] != "")])
+        # 使用新的检查方法
+        for index in range(total_rows):
+            if self.check_row_processed(df, index, reasoning_col, classification_col):
+                processed_rows += 1
         
-        print(f"总行数: {total_rows}")
-        print(f"已处理: {processed_rows}")
-        print(f"待处理: {total_rows - processed_rows}")
-        print(f"完成率: {processed_rows/total_rows*100:.1f}%")
-        print(f"当前线程数: {self.config.get('max_workers', 3)}")
+        progress_pct = processed_rows/total_rows*100 if total_rows > 0 else 0
+        remaining = total_rows - processed_rows
+        
+        print(f"\n📊 处理状态")
+        print(f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+        print(f"📝 总行数:     {total_rows:,}")
+        print(f"✅ 已处理:     {processed_rows:,}")
+        print(f"⏳ 待处理:     {remaining:,}")
+        print(f"📈 完成率:     {progress_pct:.1f}%")
+        print(f"🔧 线程数:     {self.config.get('max_workers', 3)}")
+        
+        # 进度条
+        bar_length = 30
+        filled_length = int(bar_length * progress_pct / 100)
+        bar = "█" * filled_length + "░" * (bar_length - filled_length)
+        print(f"📊 进度条:     [{bar}] {progress_pct:.1f}%")
         
         # 预估剩余时间
-        if processed_rows > 0:
-            remaining = total_rows - processed_rows
-            avg_time_per_item = 3.0 / self.config.get('max_workers', 3)  # 假设平均3秒/项，除以线程数
+        if processed_rows > 0 and remaining > 0:
+            avg_time_per_item = 3.0 / self.config.get('max_workers', 3)
             estimated_hours = (remaining * avg_time_per_item) / 3600
-            print(f"预估剩余时间: {estimated_hours:.1f} 小时")
+            if estimated_hours < 1:
+                estimated_minutes = (remaining * avg_time_per_item) / 60
+                print(f"⏰ 预估时间:   {estimated_minutes:.0f} 分钟")
+            else:
+                print(f"⏰ 预估时间:   {estimated_hours:.1f} 小时")
+        print(f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n")
 
 
 def main():
@@ -374,7 +395,7 @@ def main():
     # 命令行参数覆盖配置文件设置
     if args.workers is not None:
         processor.config["max_workers"] = args.workers
-        print(f"使用命令行指定的线程数: {args.workers}")
+        print(f"🔧 使用命令行指定的线程数: {args.workers}")
     
     if args.reset:
         processor.reset_progress()
@@ -386,7 +407,7 @@ def main():
     
     # 检查API密钥
     if processor.config["api_key"] == "sk-your-api-key-here":
-        print("请在配置文件中设置正确的API密钥")
+        print("⚠️  请在配置文件中设置正确的API密钥")
         return
     
     processor.process_csv()
