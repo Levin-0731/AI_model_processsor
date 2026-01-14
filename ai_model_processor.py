@@ -10,6 +10,7 @@ AI模型调用脚本
 import pandas as pd
 import requests
 import json
+import yaml
 import time
 import os
 import sys
@@ -26,7 +27,7 @@ from threading import Lock
 
 
 class AIModelProcessor:
-    def __init__(self, config_file: str = "config.json", providers_file: str = "providers.json"):
+    def __init__(self, config_file: str = "config.json", providers_file: str = "providers.yaml"):
         """初始化AI模型处理器"""
         self.config = self.load_config(config_file)
         self.providers = self.load_providers(providers_file)
@@ -77,13 +78,13 @@ class AIModelProcessor:
             },
             "default_provider": "openai"
         }
-        
+
         if os.path.exists(providers_file):
             with open(providers_file, 'r', encoding='utf-8') as f:
-                return json.load(f)
+                return yaml.safe_load(f)
         else:
             with open(providers_file, 'w', encoding='utf-8') as f:
-                json.dump(default_providers, f, indent=2, ensure_ascii=False)
+                yaml.dump(default_providers, f, allow_unicode=True, default_flow_style=False)
             print(f"📝 已创建默认Provider配置文件: {providers_file}")
             return default_providers
     
@@ -93,7 +94,7 @@ class AIModelProcessor:
         providers = self.providers.get("providers", {})
         
         if provider_name not in providers:
-            print(f"❌ Provider '{provider_name}' 不存在于 providers.json")
+            print(f"❌ Provider '{provider_name}' 不存在于 providers.yaml")
             print(f"可用的Provider: {', '.join(providers.keys())}")
             sys.exit(1)
         
@@ -682,7 +683,7 @@ class AIModelProcessor:
 def main():
     parser = argparse.ArgumentParser(description='AI模型调用脚本（支持多Provider）')
     parser.add_argument('--config', default='config.json', help='配置文件路径')
-    parser.add_argument('--providers', default='providers.json', help='Provider配置文件路径')
+    parser.add_argument('--providers', default='providers.yaml', help='Provider配置文件路径')
     parser.add_argument('--reset', action='store_true', help='重置进度')
     parser.add_argument('--status', action='store_true', help='显示状态')
     parser.add_argument('--list-providers', action='store_true', help='列出所有Provider')
@@ -723,7 +724,7 @@ def main():
     # 检查API密钥
     if not processor.provider_config.get("api_key"):
         provider_name = processor.config.get("provider", "unknown")
-        print(f"⚠️  请在 providers.json 中为 '{provider_name}' 设置API密钥")
+        print(f"⚠️  请在 providers.yaml 中为 '{provider_name}' 设置API密钥")
         return
     
     processor.process_csv()
