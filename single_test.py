@@ -3,7 +3,7 @@
 """
 单个AI识别测试脚本
 支持文本和图片输入（兼容视觉模型）
-直接在代码中写入user_prompt和image_path，在终端展示输出结果
+支持多Provider和多种API调用方式
 """
 
 # ==================== 在这里修改你要测试的内容 ====================
@@ -16,8 +16,6 @@ USER_PROMPT = """
 """
 
 # 图片路径（可选，留空则使用纯文本模式）
-# 支持绝对路径或相对路径
-# 示例: IMAGE_PATH = "/path/to/image.jpg"
 IMAGE_PATH = ""
 # ================================================================
 
@@ -27,25 +25,23 @@ import time
 import os
 import base64
 import mimetypes
-from typing import Dict, Any, Optional, List, Union
+from typing import Dict, Any, Optional, List, Union, Tuple
 
 
 class SingleAITest:
-    def __init__(self, config_file: str = "config.json"):
+    def __init__(self, config_file: str = "config.json", providers_file: str = "providers.json"):
         """初始化AI测试器"""
         self.config = self.load_config(config_file)
+        self.providers = self.load_providers(providers_file)
+        self.provider_config = self.get_provider_config()
         
     def load_config(self, config_file: str) -> Dict[str, Any]:
-        """加载配置文件"""
+        """加载运行配置文件"""
         default_config = {
-            "api_url": "https://api.moonshot.cn/v1/chat/completions",
-            "api_key": "sk-your-api-key-here",
-            "model_name": "kimi-k2-0905-preview",
+            "provider": "openai",
+            "model_name": "gpt-4o",
             "temperature": 0.6,
             "max_tokens": 2000,
-            "timeout": 30,
-            "max_retries": 3,
-            "retry_delay": 1,
             "prompt_file": "system_prompt.md",
             "image_base_path": "",
             "image_detail": "auto"
@@ -58,6 +54,24 @@ class SingleAITest:
         
         return default_config
     
+    def load_providers(self, providers_file: str) -> Dict[str, Any]:
+        """加载Provider配置文件"""
+        if os.path.exists(providers_file):
+            with open(providers_file, 'r', encoding='utf-8') as f:
+                return json.load(f)
+        return {"providers": {}, "default_provider": "openai"}
+    
+    def get_provider_config(self) -> Dict[str, Any]:
+        """获取当前Provider的配置"""
+        provider_name = self.config.get("provider", self.providers.get("default_provider", "openai"))
+        providers = self.providers.get("providers", {})
+        
+        if provider_name not in providers:
+            print(f"❌ Provider '{provider_name}' 不存在于 providers.json")
+            return {}
+        
+        return providers[provider_name]
+    
     def load_system_prompt(self) -> str:
         """加载系统提示词"""
         prompt_file = self.config["prompt_file"]
@@ -68,7 +82,6 @@ class SingleAITest:
         with open(prompt_file, 'r', encoding='utf-8') as f:
             content = f.read()
         
-        # 如果文件包含 system_prompt = """...""" 格式，提取其中的内容
         if 'system_prompt = """' in content:
             start = content.find('system_prompt = """') + len('system_prompt = """')
             end = content.rfind('"""')
@@ -83,12 +96,11 @@ class SingleAITest:
             print(f"❌ 图片不存在: {image_path}")
             return None
         
-        # 获取MIME类型
         mime_type, _ = mimetypes.guess_type(image_path)
         supported_types = ['image/jpeg', 'image/png', 'image/gif', 'image/webp']
         
         if mime_type not in supported_types:
-            print(f"❌ 不支持的图片格式: {mime_type} (支持: {', '.join(supported_types)})")
+            print(f"❌ 不支持的图片格式: {mime_type}")
             return None
         
         try:
@@ -99,41 +111,39 @@ class SingleAITest:
             print(f"❌ 读取图片失败: {str(e)}")
             return None
     
-    def build_user_message(self, text: str, image_path: str = None) -> Union[str, List]:
-        """
-        构建用户消息（支持文本和图片）
+    def get_image_base64_raw(self, image_path: str) -> Optional[Tuple[str, str]]:
+        """获取图片的原始Base64数据和MIME类型"""
+        if not os.path.exists(image_path):
+            return None
         
-        Args:
-            text: 文本提示词
-            image_path: 图片路径（可选）
+        mime_type, _ = mimetypes.guess_type(image_path)
+        if not mime_type:
+            return None
         
-        Returns:
-            纯文本模式返回字符串，图片模式返回列表
-        """
-        # 纯文本模式
+        try:
+            with open(image_path, 'rb') as f:
+                image_data = base64.b64encode(f.read()).decode('utf-8')
+            return image_data, mime_type
+        except:
+            return None
+    
+    def build_user_message_openai(self, text: str, image_path: str = None) -> Union[str, List]:
+        """构建OpenAI格式的用户消息"""
         if not image_path:
             return text
         
-        # 处理图片路径
         image_base_path = self.config.get("image_base_path", "")
         if image_base_path and not os.path.isabs(image_path):
             image_path = os.path.join(image_base_path, image_path)
         
-        # 编码图片
         image_url = self.encode_image_to_base64(image_path)
         if not image_url:
-            # 图片处理失败，降级为纯文本
-            print(f"⚠️ 图片处理失败，降级为纯文本模式")
             return text
         
-        # 构建多模态消息
         content = []
-        
-        # 添加文本部分（如果有）
         if text and text.strip():
             content.append({"type": "text", "text": text})
         
-        # 添加图片部分
         content.append({
             "type": "image_url",
             "image_url": {
@@ -144,25 +154,40 @@ class SingleAITest:
         
         return content
     
-    def call_ai_api(self, user_prompt: str, system_prompt: str, image_path: str = None) -> Optional[Dict[str, Any]]:
-        """
-        调用AI API（支持文本和图片）
+    def build_user_message_anthropic(self, text: str, image_path: str = None) -> List:
+        """构建Anthropic格式的用户消息"""
+        content = []
         
-        Args:
-            user_prompt: 用户提示词
-            system_prompt: 系统提示词
-            image_path: 图片路径（可选）
+        if image_path:
+            image_base_path = self.config.get("image_base_path", "")
+            if image_base_path and not os.path.isabs(image_path):
+                image_path = os.path.join(image_base_path, image_path)
+            
+            result = self.get_image_base64_raw(image_path)
+            if result:
+                image_data, mime_type = result
+                content.append({
+                    "type": "image",
+                    "source": {
+                        "type": "base64",
+                        "media_type": mime_type,
+                        "data": image_data
+                    }
+                })
         
-        Returns:
-            解析后的响应字典，失败返回None
-        """
+        if text and text.strip():
+            content.append({"type": "text", "text": text})
+        
+        return content if content else [{"type": "text", "text": text or ""}]
+    
+    def call_api_openai(self, user_prompt: str, system_prompt: str, image_path: str = None) -> Optional[str]:
+        """调用OpenAI兼容格式的API"""
         headers = {
             "Content-Type": "application/json",
-            "Authorization": f"Bearer {self.config['api_key']}"
+            "Authorization": f"Bearer {self.provider_config['api_key']}"
         }
         
-        # 构建用户消息（支持图片）
-        user_content = self.build_user_message(user_prompt, image_path)
+        user_content = self.build_user_message_openai(user_prompt, image_path)
         
         data = {
             "model": self.config["model_name"],
@@ -170,53 +195,192 @@ class SingleAITest:
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_content}
             ],
-            "temperature": self.config["temperature"]
+            "temperature": self.config.get("temperature", 0.6)
         }
         
         if "max_tokens" in self.config:
             data["max_tokens"] = self.config["max_tokens"]
         
-        print("🚀 正在调用AI API...")
-        if image_path:
-            print(f"🖼️ 使用图片: {image_path}")
+        max_retries = self.provider_config.get("max_retries", 3)
+        retry_delay = self.provider_config.get("retry_delay", 1)
         
-        for attempt in range(self.config["max_retries"]):
+        for attempt in range(max_retries):
             try:
                 response = requests.post(
-                    self.config["api_url"],
+                    self.provider_config["api_url"],
                     headers=headers,
                     json=data,
-                    timeout=self.config["timeout"]
+                    timeout=self.provider_config.get("timeout", 60)
                 )
                 
                 if response.status_code == 200:
                     result = response.json()
                     if "choices" in result and len(result["choices"]) > 0:
-                        content = result["choices"][0]["message"]["content"]
-                        return self.parse_ai_response(content)
-                    else:
-                        print(f"❌ API返回格式错误")
+                        return result["choices"][0]["message"]["content"]
                 else:
                     print(f"❌ API调用失败 (状态码: {response.status_code})")
-                    print(f"响应内容: {response.text}")
+                    print(f"响应内容: {response.text[:200]}")
                 
             except requests.exceptions.RequestException as e:
-                if attempt == self.config["max_retries"] - 1:
+                if attempt == max_retries - 1:
                     print(f"❌ API调用失败: {str(e)}")
                 else:
                     print(f"⚠️  第 {attempt + 1} 次尝试失败，重试中...")
-                    time.sleep(self.config["retry_delay"] * (attempt + 1))
+                    time.sleep(retry_delay * (attempt + 1))
         
+        return None
+    
+    def call_api_anthropic(self, user_prompt: str, system_prompt: str, image_path: str = None) -> Optional[str]:
+        """调用Anthropic Claude API"""
+        headers = {
+            "Content-Type": "application/json",
+            "x-api-key": self.provider_config['api_key'],
+            "anthropic-version": self.provider_config.get("api_version", "2023-06-01")
+        }
+        
+        user_content = self.build_user_message_anthropic(user_prompt, image_path)
+        
+        data = {
+            "model": self.config["model_name"],
+            "max_tokens": self.config.get("max_tokens", 4096),
+            "system": system_prompt,
+            "messages": [
+                {"role": "user", "content": user_content}
+            ]
+        }
+        
+        if "temperature" in self.config:
+            data["temperature"] = self.config["temperature"]
+        
+        max_retries = self.provider_config.get("max_retries", 3)
+        retry_delay = self.provider_config.get("retry_delay", 2)
+        
+        for attempt in range(max_retries):
+            try:
+                response = requests.post(
+                    self.provider_config["api_url"],
+                    headers=headers,
+                    json=data,
+                    timeout=self.provider_config.get("timeout", 60)
+                )
+                
+                if response.status_code == 200:
+                    result = response.json()
+                    if "content" in result and len(result["content"]) > 0:
+                        return result["content"][0]["text"]
+                else:
+                    print(f"❌ API调用失败 (状态码: {response.status_code})")
+                    print(f"响应内容: {response.text[:200]}")
+                
+            except requests.exceptions.RequestException as e:
+                if attempt == max_retries - 1:
+                    print(f"❌ API调用失败: {str(e)}")
+                else:
+                    print(f"⚠️  第 {attempt + 1} 次尝试失败，重试中...")
+                    time.sleep(retry_delay * (attempt + 1))
+        
+        return None
+    
+    def call_api_google(self, user_prompt: str, system_prompt: str, image_path: str = None) -> Optional[str]:
+        """调用Google Gemini API"""
+        model_name = self.config["model_name"]
+        api_key = self.provider_config['api_key']
+        base_url = self.provider_config["api_url"]
+        url = f"{base_url}/models/{model_name}:generateContent?key={api_key}"
+        
+        headers = {"Content-Type": "application/json"}
+        
+        parts = []
+        if system_prompt:
+            parts.append({"text": f"System: {system_prompt}\n\nUser: {user_prompt}"})
+        else:
+            parts.append({"text": user_prompt})
+        
+        if image_path:
+            image_base_path = self.config.get("image_base_path", "")
+            if image_base_path and not os.path.isabs(image_path):
+                image_path = os.path.join(image_base_path, image_path)
+            
+            result = self.get_image_base64_raw(image_path)
+            if result:
+                image_data, mime_type = result
+                parts.append({
+                    "inline_data": {
+                        "mime_type": mime_type,
+                        "data": image_data
+                    }
+                })
+        
+        data = {
+            "contents": [{"parts": parts}],
+            "generationConfig": {
+                "temperature": self.config.get("temperature", 0.6),
+                "maxOutputTokens": self.config.get("max_tokens", 2048)
+            }
+        }
+        
+        max_retries = self.provider_config.get("max_retries", 3)
+        retry_delay = self.provider_config.get("retry_delay", 2)
+        
+        for attempt in range(max_retries):
+            try:
+                response = requests.post(
+                    url,
+                    headers=headers,
+                    json=data,
+                    timeout=self.provider_config.get("timeout", 60)
+                )
+                
+                if response.status_code == 200:
+                    result = response.json()
+                    if "candidates" in result and len(result["candidates"]) > 0:
+                        candidate = result["candidates"][0]
+                        if "content" in candidate and "parts" in candidate["content"]:
+                            return candidate["content"]["parts"][0]["text"]
+                else:
+                    print(f"❌ API调用失败 (状态码: {response.status_code})")
+                    print(f"响应内容: {response.text[:200]}")
+                
+            except requests.exceptions.RequestException as e:
+                if attempt == max_retries - 1:
+                    print(f"❌ API调用失败: {str(e)}")
+                else:
+                    print(f"⚠️  第 {attempt + 1} 次尝试失败，重试中...")
+                    time.sleep(retry_delay * (attempt + 1))
+        
+        return None
+    
+    def call_ai_api(self, user_prompt: str, system_prompt: str, image_path: str = None) -> Optional[Dict[str, Any]]:
+        """统一的API调用入口"""
+        api_type = self.provider_config.get("api_type", "openai")
+        
+        print(f"🚀 正在调用AI API...")
+        print(f"   Provider: {self.config.get('provider', 'unknown')}")
+        print(f"   模型: {self.config['model_name']}")
+        print(f"   API类型: {api_type}")
+        if image_path:
+            print(f"   🖼️ 图片: {image_path}")
+        
+        if api_type == "openai":
+            content = self.call_api_openai(user_prompt, system_prompt, image_path)
+        elif api_type == "anthropic":
+            content = self.call_api_anthropic(user_prompt, system_prompt, image_path)
+        elif api_type == "google":
+            content = self.call_api_google(user_prompt, system_prompt, image_path)
+        else:
+            print(f"❌ 不支持的API类型: {api_type}")
+            return None
+        
+        if content:
+            return self.parse_ai_response(content)
         return None
     
     def parse_ai_response(self, content: str) -> Optional[Dict[str, Any]]:
         """解析AI返回的JSON内容"""
         try:
-            # 尝试直接解析JSON
             if content.strip().startswith('{') and content.strip().endswith('}'):
                 return json.loads(content)
             
-            # 如果内容包含在代码块中，提取JSON部分
             if '```json' in content:
                 start = content.find('```json') + 7
                 end = content.find('```', start)
@@ -224,7 +388,6 @@ class SingleAITest:
                     json_content = content[start:end].strip()
                     return json.loads(json_content)
             
-            # 尝试找到JSON对象
             start = content.find('{')
             end = content.rfind('}') + 1
             if start >= 0 and end > start:
@@ -241,13 +404,7 @@ class SingleAITest:
             return None
     
     def test_single_prompt(self, user_prompt: str, image_path: str = None):
-        """
-        测试单个提示词（支持图片）
-        
-        Args:
-            user_prompt: 用户提示词
-            image_path: 图片路径（可选）
-        """
+        """测试单个提示词"""
         print("\n" + "="*80)
         print("🧪 AI识别测试")
         if image_path:
@@ -256,7 +413,6 @@ class SingleAITest:
             print("📝 模式: 纯文本")
         print("="*80)
         
-        # 加载系统提示词
         system_prompt = self.load_system_prompt()
         if not system_prompt:
             print("❌ 无法加载系统提示词")
@@ -269,7 +425,6 @@ class SingleAITest:
             print(f"\n🖼️ 图片路径: {image_path}")
         print("-" * 80)
         
-        # 调用API（支持图片）
         result = self.call_ai_api(user_prompt, system_prompt, image_path)
         
         if result:
@@ -297,18 +452,16 @@ class SingleAITest:
 
 def main():
     """主函数"""
-    # 创建测试器实例
     tester = SingleAITest()
     
     # 检查API密钥
-    if tester.config["api_key"] == "sk-your-api-key-here":
-        print("⚠️  请在 config.json 中设置正确的API密钥")
+    if not tester.provider_config.get("api_key"):
+        provider_name = tester.config.get("provider", "unknown")
+        print(f"⚠️  请在 providers.json 中为 '{provider_name}' 设置API密钥")
         return
     
-    # 获取图片路径（如果设置了的话）
     image_path = IMAGE_PATH.strip() if IMAGE_PATH else None
     
-    # 执行测试（支持图片）
     tester.test_single_prompt(USER_PROMPT.strip(), image_path)
 
 

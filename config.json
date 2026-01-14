@@ -1,20 +1,19 @@
 {
-  "api_url": "https://api.deepseek.com/v1/chat/completions",
-  "api_key": "",
+  "provider": "deepseek",
   "model_name": "deepseek-chat",
   "temperature": 0.3,
   "max_tokens": 5000,
-  "timeout": 30,
-  "max_retries": 3,
-  "retry_delay": 1,
-  "request_delay": 0.5,
-  "csv_input_file": "数据 copy.csv",
+
+  "csv_input_file": "sample_data.csv",
   "prompt_file": "system_prompt.md",
-  "user_prompt_column": "remark",
+  "user_prompt_column": "user_prompt",
+
   "image_column": "",
   "image_base_path": "",
   "image_detail": "auto",
+
   "max_workers": 3,
-  "_comment": "max_workers: 并发线程数量，建议3-8，过多可能触发API限制",
-  "_image_comment": "image_column: 图片路径列名(可选), image_base_path: 图片基础路径(可选), image_detail: low/high/auto"
+  "request_delay": 0.5,
+
+  "_comment": "provider: 指定使用哪个API提供商(见providers.json), model_name: 该提供商下的模型名称"
 }
