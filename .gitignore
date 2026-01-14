@@ -61,6 +61,7 @@ venv.bak/
 ai_processor.log
 progress.json
 providers.json
+config.json
 
 # macOS
 .DS_Store

@@ -1,0 +1,21 @@
+# AI模型处理器运行配置文件
+# provider: 指定使用哪个API提供商(见providers.yaml)
+# model_name: 该提供商下的模型名称
+
+provider: deepseek
+model_name: deepseek-chat
+temperature: 0.3
+max_tokens: 5000
+
+csv_input_file: sample_data.csv
+prompt_file: system_prompt.md
+user_prompt_column: user_prompt
+
+# 图片相关配置（用于视觉模型）
+image_column: ""
+image_base_path: ""
+image_detail: auto
+
+# 并发配置
+max_workers: 3
+request_delay: 0.5

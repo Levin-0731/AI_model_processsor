@@ -27,7 +27,7 @@ from threading import Lock
 
 
 class AIModelProcessor:
-    def __init__(self, config_file: str = "config.json", providers_file: str = "providers.yaml"):
+    def __init__(self, config_file: str = "config.yaml", providers_file: str = "providers.yaml"):
         """初始化AI模型处理器"""
         self.config = self.load_config(config_file)
         self.providers = self.load_providers(providers_file)
@@ -51,16 +51,16 @@ class AIModelProcessor:
             "max_workers": 3,
             "request_delay": 0.5
         }
-        
+
         if os.path.exists(config_file):
             with open(config_file, 'r', encoding='utf-8') as f:
-                user_config = json.load(f)
+                user_config = yaml.safe_load(f)
                 default_config.update(user_config)
         else:
             with open(config_file, 'w', encoding='utf-8') as f:
-                json.dump(default_config, f, indent=2, ensure_ascii=False)
+                yaml.dump(default_config, f, allow_unicode=True, default_flow_style=False)
             print(f"📝 已创建默认配置文件: {config_file}")
-            
+
         return default_config
     
     def load_providers(self, providers_file: str) -> Dict[str, Any]:
@@ -682,7 +682,7 @@ class AIModelProcessor:
 
 def main():
     parser = argparse.ArgumentParser(description='AI模型调用脚本（支持多Provider）')
-    parser.add_argument('--config', default='config.json', help='配置文件路径')
+    parser.add_argument('--config', default='config.yaml', help='配置文件路径')
     parser.add_argument('--providers', default='providers.yaml', help='Provider配置文件路径')
     parser.add_argument('--reset', action='store_true', help='重置进度')
     parser.add_argument('--status', action='store_true', help='显示状态')
