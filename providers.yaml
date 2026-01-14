@@ -82,12 +82,23 @@ providers:
 
   xstx:
     api_url: https://200.xstx.info/v1/chat/completions
-    api_key: ""  # 请在此处填入你的API Key
+    api_key: ""
     api_type: openai
     timeout: 60
     max_retries: 3
     retry_delay: 2
     available_models:
       - claude-opus-4-5-20251101
+
+  bltcy:
+    api_url: https://api.bltcy.ai/v1/chat/completions
+    api_key: ""
+    api_type: openai
+    timeout: 60
+    max_retries: 3
+    retry_delay: 2
+    available_models:
+      - gpt-4o
+      - gemini-3-flash-preview
 
 default_provider: openai
