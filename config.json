@@ -11,6 +11,10 @@
   "csv_input_file": "数据 copy.csv",
   "prompt_file": "system_prompt.md",
   "user_prompt_column": "remark",
+  "image_column": "",
+  "image_base_path": "",
+  "image_detail": "auto",
   "max_workers": 3,
-  "_comment": "max_workers: 并发线程数量，建议3-8，过多可能触发API限制"
+  "_comment": "max_workers: 并发线程数量，建议3-8，过多可能触发API限制",
+  "_image_comment": "image_column: 图片路径列名(可选), image_base_path: 图片基础路径(可选), image_detail: low/high/auto"
 }
