@@ -138,16 +138,13 @@ class AIModelProcessor:
         
         return content.strip()
     
-    def check_row_processed(self, df: pd.DataFrame, index: int, reasoning_col: str, classification_col: str) -> bool:
+    def check_row_processed(self, df: pd.DataFrame, index: int, response_col: str) -> bool:
         """检查指定行是否已经处理过"""
-        if reasoning_col not in df.columns or classification_col not in df.columns:
+        if response_col not in df.columns:
             return False
         
-        reasoning = df.at[index, reasoning_col]
-        classification = df.at[index, classification_col]
-        
-        return (not pd.isna(reasoning) and str(reasoning).strip() != "" and
-                not pd.isna(classification) and str(classification).strip() != "")
+        response = df.at[index, response_col]
+        return not pd.isna(response) and str(response).strip() != ""
     
     def encode_image_to_base64(self, image_path: str) -> Optional[str]:
         """将本地图片转换为Base64编码的data URL"""
@@ -451,27 +448,24 @@ class AIModelProcessor:
             self.logger.error(f"❌ JSON解析错误: {str(e)[:30]}...")
             return None
     
-    def process_single_row(self, index: int, user_prompt: str, system_prompt: str, 
-                          df: pd.DataFrame, reasoning_col: str, classification_col: str,
+    def process_single_row(self, index: int, user_prompt: str, system_prompt: str,
+                          df: pd.DataFrame, response_col: str,
                           image_path: str = None) -> bool:
         """处理单行数据（线程安全）"""
         try:
             time.sleep(self.config.get("request_delay", 0.5))
-            
+
             result = self.call_ai_api(user_prompt, system_prompt, image_path)
-            
+
             if result:
-                reasoning = result.get("Thoughts", "")
-                classification = result.get("Category", "")
-                
+                # 直接保存完整的 AI 响应（JSON 格式）
+                full_response = json.dumps(result, ensure_ascii=False)
                 with self.csv_lock:
-                    df.at[index, reasoning_col] = reasoning
-                    df.at[index, classification_col] = classification
-                
+                    df.at[index, response_col] = full_response
                 return True
             else:
                 return False
-                
+
         except Exception as e:
             return False
     
@@ -511,14 +505,12 @@ class AIModelProcessor:
             self.logger.error("❌ 无法加载系统提示词")
             return False
         
+        # 使用单一的响应列，不再拆分 reasoning 和 classification
         model_name_safe = self.config["model_name"].replace("-", "_").replace(".", "_")
-        reasoning_col = f"reasoning_{model_name_safe}"
-        classification_col = f"classification_{model_name_safe}"
+        response_col = f"ai_response_{model_name_safe}"
         
-        if reasoning_col not in df.columns:
-            df[reasoning_col] = ""
-        if classification_col not in df.columns:
-            df[classification_col] = ""
+        if response_col not in df.columns:
+            df[response_col] = ""
         
         total_rows = len(df)
         rows_to_process = []
@@ -527,7 +519,7 @@ class AIModelProcessor:
         self.logger.info(f"📊 扫描CSV文件，检查处理状态...")
         
         for index, row in df.iterrows():
-            if self.check_row_processed(df, index, reasoning_col, classification_col):
+            if self.check_row_processed(df, index, response_col):
                 processed_count += 1
                 continue
             
@@ -561,7 +553,7 @@ class AIModelProcessor:
                     future = executor.submit(
                         self.process_single_row, 
                         index, user_prompt, system_prompt, 
-                        df, reasoning_col, classification_col,
+                        df, response_col,
                         image_path
                     )
                     future_to_index[future] = index
@@ -597,13 +589,10 @@ class AIModelProcessor:
         
         df = pd.read_csv(csv_file)
         model_name_safe = self.config["model_name"].replace("-", "_").replace(".", "_")
-        reasoning_col = f"reasoning_{model_name_safe}"
-        classification_col = f"classification_{model_name_safe}"
+        response_col = f"ai_response_{model_name_safe}"
         
-        if reasoning_col in df.columns:
-            df[reasoning_col] = ""
-        if classification_col in df.columns:
-            df[classification_col] = ""
+        if response_col in df.columns:
+            df[response_col] = ""
         
         df.to_csv(csv_file, index=False)
         self.logger.info("🔄 进度已重置，已清空所有处理结果")
@@ -617,14 +606,13 @@ class AIModelProcessor:
         
         df = pd.read_csv(csv_file)
         model_name_safe = self.config["model_name"].replace("-", "_").replace(".", "_")
-        reasoning_col = f"reasoning_{model_name_safe}"
-        classification_col = f"classification_{model_name_safe}"
+        response_col = f"ai_response_{model_name_safe}"
         
         total_rows = len(df)
         processed_rows = 0
         
         for index in range(total_rows):
-            if self.check_row_processed(df, index, reasoning_col, classification_col):
+            if self.check_row_processed(df, index, response_col):
                 processed_rows += 1
         
         progress_pct = processed_rows/total_rows*100 if total_rows > 0 else 0
