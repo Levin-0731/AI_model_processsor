@@ -21,7 +21,6 @@ wheels/
 *.egg
 MANIFEST
 
-<<<<<<< HEAD
 # PyInstaller
 *.manifest
 *.spec
@@ -42,19 +41,14 @@ coverage.xml
 .hypothesis/
 .pytest_cache/
 
-=======
->>>>>>> 43c7ba1 (feat: 添加 Excel 文件支持和嵌入图片提取功能)
 # Virtual environments
 .env
 .venv
 env/
 venv/
 ENV/
-<<<<<<< HEAD
 env.bak/
 venv.bak/
-=======
->>>>>>> 43c7ba1 (feat: 添加 Excel 文件支持和嵌入图片提取功能)
 
 # IDE
 .vscode/
@@ -63,13 +57,6 @@ venv.bak/
 *.swo
 *~
 
-<<<<<<< HEAD
-# Project specific
-ai_processor.log
-progress.json
-providers.json
-config.json
-=======
 # Logs
 *.log
 
@@ -77,18 +64,20 @@ config.json
 my_providers.yaml
 *_secrets.yaml
 .env.local
->>>>>>> 43c7ba1 (feat: 添加 Excel 文件支持和嵌入图片提取功能)
+
+# Project specific
+progress.json
 
 # macOS
 .DS_Store
 
 # Windows
 Thumbs.db
-<<<<<<< HEAD
 ehthumbs.db
 Desktop.ini
-=======
 
 # Test files
 test_config.yaml
->>>>>>> 43c7ba1 (feat: 添加 Excel 文件支持和嵌入图片提取功能)
+
+# 结果文件（可选择性提交）
+*_results.csv
