@@ -478,7 +478,7 @@ class AIModelProcessor:
         """
         获取输出文件路径
         
-        对于Excel文件，始终输出为CSV以避免覆盖原文件中的嵌入图片
+        对于Excel文件，输出为新的Excel文件（保留图片）
         对于CSV文件，直接使用原文件
         
         Args:
@@ -488,16 +488,37 @@ class AIModelProcessor:
             输出文件路径
         """
         if self.is_excel_file(input_file):
-            # Excel 输入 -> CSV 输出（保护原始文件中的嵌入图片）
-            return os.path.splitext(input_file)[0] + "_results.csv"
+            # Excel 输入 -> 新 Excel 输出（保留图片）
+            base, ext = os.path.splitext(input_file)
+            return base + "_results" + ext
         else:
             return input_file
+    
+    def _copy_excel_with_images(self, input_file: str, output_file: str) -> bool:
+        """
+        复制Excel文件（保留所有图片和格式）
+        
+        Args:
+            input_file: 源文件路径
+            output_file: 目标文件路径
+            
+        Returns:
+            是否成功复制
+        """
+        import shutil
+        try:
+            shutil.copy2(input_file, output_file)
+            self.logger.info(f"📋 已复制Excel文件到: {output_file}")
+            return True
+        except Exception as e:
+            self.logger.error(f"❌ 复制Excel文件失败: {str(e)}")
+            return False
     
     def save_output_file(self, df: pd.DataFrame, input_file: str):
         """
         保存输出文件
         
-        对于Excel输入，保存为独立的CSV文件，避免覆盖原Excel（保护嵌入图片）
+        对于Excel输入，复制原文件到新文件（保留图片），然后更新数据列
         对于CSV输入，直接保存回原文件
         
         Args:
@@ -506,15 +527,78 @@ class AIModelProcessor:
         """
         try:
             output_file = self.get_output_file_path(input_file)
-            df.to_csv(output_file, index=False)
             
-            # 首次保存时提示输出文件路径
-            if not hasattr(self, '_output_file_logged') or not self._output_file_logged:
-                if output_file != input_file:
-                    self.logger.info(f"💾 结果将保存到: {output_file}（原始Excel文件保持不变）")
-                self._output_file_logged = True
+            if self.is_excel_file(input_file):
+                # Excel文件：复制原文件（首次），然后用openpyxl更新数据
+                if not os.path.exists(output_file):
+                    if not self._copy_excel_with_images(input_file, output_file):
+                        return
+                
+                # 使用openpyxl更新结果列（保留图片）
+                self._update_excel_results(df, output_file)
+                
+                # 首次保存时提示
+                if not hasattr(self, '_output_file_logged') or not self._output_file_logged:
+                    self.logger.info(f"💾 结果将保存到: {output_file}（保留所有图片）")
+                    self._output_file_logged = True
+            else:
+                # CSV文件：直接保存
+                df.to_csv(output_file, index=False)
+                
         except Exception as e:
             self.logger.error(f"❌ 保存文件失败: {str(e)}")
+    
+    def _update_excel_results(self, df: pd.DataFrame, output_file: str):
+        """
+        使用openpyxl更新Excel文件的结果列（保留图片）
+        
+        Args:
+            df: 包含结果的DataFrame
+            output_file: Excel文件路径
+        """
+        try:
+            wb = load_workbook(output_file)
+            ws = wb.active
+            
+            # 获取结果列名
+            model_name_safe = self.config["model_name"].replace("-", "_").replace(".", "_")
+            response_col = f"ai_response_{model_name_safe}"
+            
+            if response_col not in df.columns:
+                wb.close()
+                return
+            
+            # 查找或创建结果列
+            header_row = 1
+            result_col_idx = None
+            
+            # 查找现有列
+            for col_idx in range(1, ws.max_column + 2):
+                cell_value = ws.cell(row=header_row, column=col_idx).value
+                if cell_value == response_col:
+                    result_col_idx = col_idx
+                    break
+                if cell_value is None:
+                    # 新列
+                    result_col_idx = col_idx
+                    ws.cell(row=header_row, column=col_idx, value=response_col)
+                    break
+            
+            if result_col_idx is None:
+                result_col_idx = ws.max_column + 1
+                ws.cell(row=header_row, column=result_col_idx, value=response_col)
+            
+            # 写入结果数据
+            for idx, value in enumerate(df[response_col]):
+                row_num = idx + 2  # Excel行号（跳过标题行）
+                if pd.notna(value) and str(value).strip():
+                    ws.cell(row=row_num, column=result_col_idx, value=str(value))
+            
+            wb.save(output_file)
+            wb.close()
+            
+        except Exception as e:
+            self.logger.error(f"❌ 更新Excel结果列失败: {str(e)}")
     
     def get_image_for_row(self, row_index: int, row: pd.Series, image_col: str) -> Optional[str]:
         """
@@ -957,8 +1041,8 @@ class AIModelProcessor:
         output_file = self.get_output_file_path(input_file)
         if self.is_excel_file(input_file) and os.path.exists(output_file):
             try:
-                # 加载已有的结果文件
-                existing_df = pd.read_csv(output_file)
+                # 加载已有的结果Excel文件
+                existing_df = pd.read_excel(output_file, engine='openpyxl')
                 # 将已处理的结果合并到当前df
                 if response_col in existing_df.columns:
                     df[response_col] = existing_df[response_col]
@@ -1048,7 +1132,7 @@ class AIModelProcessor:
             self.logger.error(f"❌ 文件不存在: {input_file}")
             return
         
-        # 对于Excel文件，删除结果CSV文件
+        # 对于Excel文件，删除结果文件
         if self.is_excel_file(input_file):
             output_file = self.get_output_file_path(input_file)
             if os.path.exists(output_file):
@@ -1092,9 +1176,9 @@ class AIModelProcessor:
         processed_rows = 0
         
         if self.is_excel_file(input_file) and os.path.exists(output_file):
-            # 从结果CSV文件读取处理状态
+            # 从结果Excel文件读取处理状态
             try:
-                result_df = pd.read_csv(output_file)
+                result_df = pd.read_excel(output_file, engine='openpyxl')
                 for index in range(len(result_df)):
                     if self.check_row_processed(result_df, index, response_col):
                         processed_rows += 1
