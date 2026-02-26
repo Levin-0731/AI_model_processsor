@@ -1,0 +1,43 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+ENV/
+
+# 日志文件
+logs/
+*.log
+
+# 数据文件（根据需要调整）
+data/*.xlsx
+data/*.csv
+data/*.jpg
+data/*.png
+!data/sample.xlsx
+
+# 配置文件中的敏感信息
+config/local_config.yaml
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# 系统文件
+.DS_Store
+Thumbs.db
+
+# 临时文件
+*.tmp
+*.bak
+organize_project.sh
+setup_symlinks.sh
+
+# 进度文件
+*_progress.json
