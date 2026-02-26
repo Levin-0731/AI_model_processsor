@@ -21,6 +21,7 @@ IMAGE_PATH = ""
 
 import requests
 import json
+import yaml
 import time
 import os
 import base64
@@ -29,7 +30,7 @@ from typing import Dict, Any, Optional, List, Union, Tuple
 
 
 class SingleAITest:
-    def __init__(self, config_file: str = "config.json", providers_file: str = "providers.json"):
+    def __init__(self, config_file: str = "config.yaml", providers_file: str = "providers.yaml"):
         """初始化AI测试器"""
         self.config = self.load_config(config_file)
         self.providers = self.load_providers(providers_file)
@@ -49,7 +50,7 @@ class SingleAITest:
         
         if os.path.exists(config_file):
             with open(config_file, 'r', encoding='utf-8') as f:
-                user_config = json.load(f)
+                user_config = yaml.safe_load(f)
                 default_config.update(user_config)
         
         return default_config
@@ -58,19 +59,29 @@ class SingleAITest:
         """加载Provider配置文件"""
         if os.path.exists(providers_file):
             with open(providers_file, 'r', encoding='utf-8') as f:
-                return json.load(f)
+                return yaml.safe_load(f)
         return {"providers": {}, "default_provider": "openai"}
     
     def get_provider_config(self) -> Dict[str, Any]:
-        """获取当前Provider的配置"""
+        """获取当前Provider的配置，支持从环境变量读取API密钥"""
         provider_name = self.config.get("provider", self.providers.get("default_provider", "openai"))
         providers = self.providers.get("providers", {})
         
         if provider_name not in providers:
-            print(f"❌ Provider '{provider_name}' 不存在于 providers.json")
+            print(f"❌ Provider '{provider_name}' 不存在于 providers.yaml")
             return {}
         
-        return providers[provider_name]
+        config = providers[provider_name].copy()
+        
+        # 如果配置文件中没有 API 密钥，尝试从环境变量读取
+        if not config.get("api_key"):
+            env_key_name = f"{provider_name.upper()}_API_KEY"
+            env_api_key = os.environ.get(env_key_name)
+            if env_api_key:
+                config["api_key"] = env_api_key
+                print(f"🔑 已从环境变量 {env_key_name} 读取API密钥")
+        
+        return config
     
     def load_system_prompt(self) -> str:
         """加载系统提示词"""
@@ -457,7 +468,7 @@ def main():
     # 检查API密钥
     if not tester.provider_config.get("api_key"):
         provider_name = tester.config.get("provider", "unknown")
-        print(f"⚠️  请在 providers.json 中为 '{provider_name}' 设置API密钥")
+        print(f"⚠️  请在 providers.yaml 中为 '{provider_name}' 设置API密钥，或设置环境变量 {provider_name.upper()}_API_KEY")
         return
     
     image_path = IMAGE_PATH.strip() if IMAGE_PATH else None

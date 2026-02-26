@@ -57,16 +57,16 @@ venv.bak/
 *.swo
 *~
 
-# Logs
-*.log
+# Project specific
+ai_processor.log
+progress.json
+providers.json
+config.json
 
-# 本地密钥配置
+# 本地密钥配置（不要提交到 Git）
 my_providers.yaml
 *_secrets.yaml
 .env.local
-
-# Project specific
-progress.json
 
 # macOS
 .DS_Store
@@ -78,6 +78,3 @@ Desktop.ini
 
 # Test files
 test_config.yaml
-
-# 结果文件（可选择性提交）
-*_results.csv

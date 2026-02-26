@@ -474,131 +474,22 @@ class AIModelProcessor:
             self.logger.error(f"❌ 加载文件失败: {str(e)}")
             return None
     
-    def get_output_file_path(self, input_file: str) -> str:
+    def save_output_file(self, df: pd.DataFrame, file_path: str):
         """
-        获取输出文件路径
-        
-        对于Excel文件，输出为新的Excel文件（保留图片）
-        对于CSV文件，直接使用原文件
-        
-        Args:
-            input_file: 输入文件路径
-            
-        Returns:
-            输出文件路径
-        """
-        if self.is_excel_file(input_file):
-            # Excel 输入 -> 新 Excel 输出（保留图片）
-            base, ext = os.path.splitext(input_file)
-            return base + "_results" + ext
-        else:
-            return input_file
-    
-    def _copy_excel_with_images(self, input_file: str, output_file: str) -> bool:
-        """
-        复制Excel文件（保留所有图片和格式）
-        
-        Args:
-            input_file: 源文件路径
-            output_file: 目标文件路径
-            
-        Returns:
-            是否成功复制
-        """
-        import shutil
-        try:
-            shutil.copy2(input_file, output_file)
-            self.logger.info(f"📋 已复制Excel文件到: {output_file}")
-            return True
-        except Exception as e:
-            self.logger.error(f"❌ 复制Excel文件失败: {str(e)}")
-            return False
-    
-    def save_output_file(self, df: pd.DataFrame, input_file: str):
-        """
-        保存输出文件
-        
-        对于Excel输入，复制原文件到新文件（保留图片），然后更新数据列
-        对于CSV输入，直接保存回原文件
+        保存输出文件（根据原文件格式选择CSV或Excel）
         
         Args:
             df: DataFrame
-            input_file: 输入文件路径
+            file_path: 文件路径
         """
         try:
-            output_file = self.get_output_file_path(input_file)
-            
-            if self.is_excel_file(input_file):
-                # Excel文件：复制原文件（首次），然后用openpyxl更新数据
-                if not os.path.exists(output_file):
-                    if not self._copy_excel_with_images(input_file, output_file):
-                        return
-                
-                # 使用openpyxl更新结果列（保留图片）
-                self._update_excel_results(df, output_file)
-                
-                # 首次保存时提示
-                if not hasattr(self, '_output_file_logged') or not self._output_file_logged:
-                    self.logger.info(f"💾 结果将保存到: {output_file}（保留所有图片）")
-                    self._output_file_logged = True
+            if self.is_excel_file(file_path):
+                # 保存为Excel（注意：嵌入的图片会丢失，只保存数据）
+                df.to_excel(file_path, index=False, engine='openpyxl')
             else:
-                # CSV文件：直接保存
-                df.to_csv(output_file, index=False)
-                
+                df.to_csv(file_path, index=False)
         except Exception as e:
             self.logger.error(f"❌ 保存文件失败: {str(e)}")
-    
-    def _update_excel_results(self, df: pd.DataFrame, output_file: str):
-        """
-        使用openpyxl更新Excel文件的结果列（保留图片）
-        
-        Args:
-            df: 包含结果的DataFrame
-            output_file: Excel文件路径
-        """
-        try:
-            wb = load_workbook(output_file)
-            ws = wb.active
-            
-            # 获取结果列名
-            model_name_safe = self.config["model_name"].replace("-", "_").replace(".", "_")
-            response_col = f"ai_response_{model_name_safe}"
-            
-            if response_col not in df.columns:
-                wb.close()
-                return
-            
-            # 查找或创建结果列
-            header_row = 1
-            result_col_idx = None
-            
-            # 查找现有列
-            for col_idx in range(1, ws.max_column + 2):
-                cell_value = ws.cell(row=header_row, column=col_idx).value
-                if cell_value == response_col:
-                    result_col_idx = col_idx
-                    break
-                if cell_value is None:
-                    # 新列
-                    result_col_idx = col_idx
-                    ws.cell(row=header_row, column=col_idx, value=response_col)
-                    break
-            
-            if result_col_idx is None:
-                result_col_idx = ws.max_column + 1
-                ws.cell(row=header_row, column=result_col_idx, value=response_col)
-            
-            # 写入结果数据
-            for idx, value in enumerate(df[response_col]):
-                row_num = idx + 2  # Excel行号（跳过标题行）
-                if pd.notna(value) and str(value).strip():
-                    ws.cell(row=row_num, column=result_col_idx, value=str(value))
-            
-            wb.save(output_file)
-            wb.close()
-            
-        except Exception as e:
-            self.logger.error(f"❌ 更新Excel结果列失败: {str(e)}")
     
     def get_image_for_row(self, row_index: int, row: pd.Series, image_col: str) -> Optional[str]:
         """
@@ -995,7 +886,7 @@ class AIModelProcessor:
             self.logger.error("❌ 未配置输入文件")
             return False
         
-        # 加载输入文件（用于获取原始数据和图片）
+        # 加载文件
         df = self.load_input_file(input_file)
         if df is None:
             return False
@@ -1037,19 +928,6 @@ class AIModelProcessor:
         model_name_safe = self.config["model_name"].replace("-", "_").replace(".", "_")
         response_col = f"ai_response_{model_name_safe}"
         
-        # 对于Excel文件，尝试加载已有的结果文件进行断点续传
-        output_file = self.get_output_file_path(input_file)
-        if self.is_excel_file(input_file) and os.path.exists(output_file):
-            try:
-                # 加载已有的结果Excel文件
-                existing_df = pd.read_excel(output_file, engine='openpyxl')
-                # 将已处理的结果合并到当前df
-                if response_col in existing_df.columns:
-                    df[response_col] = existing_df[response_col]
-                    self.logger.info(f"📂 已加载之前的结果文件: {output_file}")
-            except Exception as e:
-                self.logger.warning(f"⚠️ 无法加载结果文件，将重新开始: {str(e)}")
-        
         if response_col not in df.columns:
             df[response_col] = ""
         
@@ -1065,13 +943,7 @@ class AIModelProcessor:
                 processed_count += 1
                 continue
             
-            # 构建用户提示词
-            col_value = str(row[user_prompt_col]) if pd.notna(row[user_prompt_col]) else ""
-            user_prompt_template = self.config.get("user_prompt_template", "")
-            if user_prompt_template and col_value:
-                user_prompt = user_prompt_template.format(col_value)
-            else:
-                user_prompt = col_value
+            user_prompt = str(row[user_prompt_col]) if pd.notna(row[user_prompt_col]) else ""
             
             # 获取图片数据（支持嵌入图片和文件路径）
             image_data = self.get_image_for_row(index, row, image_col)
@@ -1132,28 +1004,18 @@ class AIModelProcessor:
             self.logger.error(f"❌ 文件不存在: {input_file}")
             return
         
-        # 对于Excel文件，删除结果文件
-        if self.is_excel_file(input_file):
-            output_file = self.get_output_file_path(input_file)
-            if os.path.exists(output_file):
-                os.remove(output_file)
-                self.logger.info(f"🔄 已删除结果文件: {output_file}")
-            else:
-                self.logger.info("🔄 没有找到需要重置的结果文件")
-        else:
-            # CSV文件直接清空结果列
-            df = self.load_input_file(input_file)
-            if df is None:
-                return
-            
-            model_name_safe = self.config["model_name"].replace("-", "_").replace(".", "_")
-            response_col = f"ai_response_{model_name_safe}"
-            
-            if response_col in df.columns:
-                df[response_col] = ""
-            
-            self.save_output_file(df, input_file)
-            self.logger.info("🔄 进度已重置，已清空所有处理结果")
+        df = self.load_input_file(input_file)
+        if df is None:
+            return
+        
+        model_name_safe = self.config["model_name"].replace("-", "_").replace(".", "_")
+        response_col = f"ai_response_{model_name_safe}"
+        
+        if response_col in df.columns:
+            df[response_col] = ""
+        
+        self.save_output_file(df, input_file)
+        self.logger.info("🔄 进度已重置，已清空所有处理结果")
     
     def show_status(self):
         """显示当前状态"""
@@ -1162,33 +1024,19 @@ class AIModelProcessor:
             print(f"❌ 文件不存在: {input_file}")
             return
         
-        # 加载输入文件获取总行数和图片信息
         df = self.load_input_file(input_file)
         if df is None:
             return
         
-        total_rows = len(df)
         model_name_safe = self.config["model_name"].replace("-", "_").replace(".", "_")
         response_col = f"ai_response_{model_name_safe}"
         
-        # 对于Excel文件，检查是否存在结果CSV文件
-        output_file = self.get_output_file_path(input_file)
+        total_rows = len(df)
         processed_rows = 0
         
-        if self.is_excel_file(input_file) and os.path.exists(output_file):
-            # 从结果Excel文件读取处理状态
-            try:
-                result_df = pd.read_excel(output_file, engine='openpyxl')
-                for index in range(len(result_df)):
-                    if self.check_row_processed(result_df, index, response_col):
-                        processed_rows += 1
-            except Exception:
-                pass
-        else:
-            # CSV文件直接从原文件检查
-            for index in range(total_rows):
-                if self.check_row_processed(df, index, response_col):
-                    processed_rows += 1
+        for index in range(total_rows):
+            if self.check_row_processed(df, index, response_col):
+                processed_rows += 1
         
         progress_pct = processed_rows/total_rows*100 if total_rows > 0 else 0
         remaining = total_rows - processed_rows
@@ -1201,8 +1049,6 @@ class AIModelProcessor:
         print(f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
         print(f"📁 文件类型:   {file_type}")
         print(f"📄 输入文件:   {input_file}")
-        if output_file != input_file:
-            print(f"💾 输出文件:   {output_file}")
         print(f"🤖 Provider:   {provider_name}")
         print(f"📦 模型:       {model_name}")
         print(f"📝 总行数:     {total_rows:,}")

@@ -101,4 +101,19 @@ providers:
       - gpt-4o
       - gemini-3-flash-preview
 
+  pikachu:
+    api_url: https://pikachu.claudecode.love/v1/messages
+    api_key: ""
+    api_type: anthropic
+    api_version: "2023-06-01"
+    timeout: 60
+    max_retries: 3
+    retry_delay: 2
+    available_models:
+      - claude-sonnet-4-20250514
+      - claude-opus-4-20250514
+      - claude-3-7-sonnet-20250219
+      - claude-3-5-sonnet-20241022
+      - claude-3-opus-20240229
+
 default_provider: openai
