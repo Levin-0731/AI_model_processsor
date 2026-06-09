@@ -78,3 +78,10 @@ Desktop.ini
 
 # Test files
 test_config.yaml
+
+# 数据与生成结果（人像隐私 / 产物，不提交到仓库）
+原图/
+结果图/
+生成图/
+结果图_mock/
+test_output.*
